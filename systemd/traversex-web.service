@@ -1,0 +1,22 @@
+[Unit]
+Description=TraverseX Admin and Portal
+After=network-online.target mariadb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=traversex
+Group=traversex
+WorkingDirectory=/var/www/html/traverseX
+EnvironmentFile=/etc/traversex/web.env
+ExecStart=/usr/bin/node /var/www/html/traverseX/src/server.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/traversex
+
+[Install]
+WantedBy=multi-user.target

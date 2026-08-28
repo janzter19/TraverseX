@@ -1,0 +1,2 @@
+# TraverseX web control: restart only the approved local worker instance.
+janzter ALL=(root) NOPASSWD: /usr/bin/systemctl restart traversex@rbmsv4-local.service, /usr/bin/systemctl is-active traversex@rbmsv4-local.service

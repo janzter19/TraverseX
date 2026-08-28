@@ -1,0 +1,10 @@
+node_modules/
+.env
+.env.*
+!.env.example
+config/secrets/
+runtime/
+*.log
+*.pem
+*.key
+.DS_Store

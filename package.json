@@ -1,0 +1,20 @@
+{
+  "name": "traversex",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "worker": "node src/worker.mjs",
+    "build": "npm --prefix ui run build",
+    "bootstrap-admin": "node scripts/bootstrap-admin.mjs",
+    "seed-rbmsv4": "node scripts/seed-rbmsv4-sample.mjs",
+    "test:schema": "node scripts/test-projection-schema.mjs",
+    "check": "node --check src/server.mjs && node --check src/worker.mjs && node --check src/config.mjs && node --check src/security.mjs && node --check src/projection-schema.mjs && npm run test:schema"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "firebase-admin": "^13.4.0",
+    "mysql2": "^3.14.3"
+  }
+}
