@@ -126,7 +126,7 @@ app.get('/admin', auth, (_req, res, next) => {
   if (fs.existsSync(dashboardPath)) return res.sendFile(dashboardPath);
   return next();
 });
-app.get('/admin/api/dashboard', auth, async (_req, res) => {
+app.get('/admin/api/dashboard', auth, async (req, res) => {
   try {
     await pendingQueueReady;
     const [projects, collections, runtime] = await Promise.all([
