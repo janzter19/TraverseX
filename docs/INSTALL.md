@@ -1,93 +1,320 @@
-# TraverseX installation
+# TraverseX installation guide
 
-TraverseX is a standalone, multi-project Firebase-to-MySQL monitoring and projection service. It does not import or depend on `/var/www/html/traverse` or RBMSv4. The admin page configures projects and collection names. The portal displays MySQL runtime metrics, so viewing analytics does not read Firestore.
+This guide installs TraverseX on a fresh Ubuntu/Debian PC and starts the Admin
+page plus one Firebase-to-MySQL worker. The commands assume:
 
-## 1. Prepare the OS account and application
+- Ubuntu 22.04/24.04 or another Debian-based Linux PC;
+- an account with `sudo` access;
+- a private GitHub login for `janzter19/TraverseX`;
+- a Firebase project and its service-account JSON file;
+- a MySQL/MariaDB server for the TraverseX control database; and
+- a separate MySQL database that will receive the registered project's
+  projection.
+
+The repository intentionally does **not** contain passwords, `.env`, Firebase
+service-account keys, `node_modules`, or runtime data. Those are created or
+provisioned locally by the steps below.
+
+## 1. Install operating-system dependencies
+
+Run this on the new PC:
 
 ```bash
-sudo useradd --system --home /var/lib/traversex --shell /usr/sbin/nologin traversex
-sudo mkdir -p /etc/traversex/firebase /var/lib/traversex
-sudo chown -R traversex:traversex /var/lib/traversex
+sudo apt update
+sudo apt install -y git gh curl ca-certificates mariadb-server openssl
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node --version
+npm --version
+```
+
+The Node.js version must be 20 or newer. If `node --version` prints an older
+version, stop and install a newer Node.js version before continuing.
+
+Create the restricted operating-system account and required directories:
+
+```bash
+sudo useradd --system --home /var/lib/traversex --shell /usr/sbin/nologin traversex 2>/dev/null || true
+sudo install -d -o traversex -g traversex -m 0750 /var/lib/traversex
+sudo install -d -o root -g traversex -m 0750 /etc/traversex/firebase
+```
+
+## 2. Clone the new repository
+
+Authenticate to GitHub using GitHub CLI:
+
+```bash
+gh auth login
+sudo mkdir -p /var/www/html/traverseX
+sudo chown "$USER":"$USER" /var/www/html/traverseX
+gh repo clone janzter19/TraverseX /var/www/html/traverseX
 cd /var/www/html/traverseX
-npm install --omit=dev
+```
+
+If the directory already contains this repository, do not clone over it. Run:
+
+```bash
+cd /var/www/html/traverseX
+git pull --ff-only origin main
+```
+
+Install the production Node.js dependencies:
+
+```bash
+npm ci --omit=dev
+```
+
+The built Admin assets are already committed under `public/dashboard`. Only
+run the UI build when you intentionally change the React source:
+
+```bash
+npm --prefix ui ci
+npm run build
+```
+
+## 3. Create the TraverseX control database
+
+Choose a new password for the dedicated database account. It must not be the
+Linux password or a Firebase password. Open the MariaDB administrator prompt:
+
+```bash
+sudo mariadb
+```
+
+Paste the following SQL, replacing `CHANGE_THIS_DB_PASSWORD` before pressing
+Enter:
+
+```sql
+CREATE DATABASE IF NOT EXISTS `traversex`
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS 'traversex'@'localhost'
+  IDENTIFIED BY 'CHANGE_THIS_DB_PASSWORD';
+ALTER USER 'traversex'@'localhost'
+  IDENTIFIED BY 'CHANGE_THIS_DB_PASSWORD';
+GRANT ALL PRIVILEGES ON `traversex`.* TO 'traversex'@'localhost';
+FLUSH PRIVILEGES;
+EXIT;
+```
+
+Load the TraverseX schema:
+
+```bash
+sudo mariadb < database/schema.sql
+```
+
+## 4. Create the local environment file
+
+Copy the safe template and edit it:
+
+```bash
 cp .env.example .env
+chmod 600 .env
+openssl rand -hex 32
+nano .env
 ```
 
-Never commit `.env` or a Firebase service-account JSON file. Keep the credential file readable only by `traversex` (`chmod 640`, root:traversex).
+Set these values in `.env`:
 
-## 2. Create the dedicated MySQL database
+```text
+SESSION_SECRET=<the output of openssl rand -hex 32>
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=3306
+DATABASE_NAME=traversex
+DATABASE_USER=traversex
+DATABASE_PASSWORD=<the database password used in Step 3>
+FIREBASE_PROJECT_ID=<your Firebase project ID>
+FIREBASE_CREDENTIALS_FILE=/etc/traversex/firebase/project-a.json
+TRAVERSEX_INSTANCE_ID=project-a
+```
 
-Use a dedicated least-privilege MySQL account. Do not use root from the running service. Run `database/schema.sql` with an administrator account, then set `DATABASE_*` in the environment file. The schema uses `xId INT(10) AUTO_INCREMENT PRIMARY KEY` for its own control tables; Firebase document IDs remain strings in worker projection tables that are added per contract.
+For the RBMSv4 sample setup, replace the corresponding values with:
 
-## 3. Bootstrap the first admin safely
+```text
+FIREBASE_PROJECT_ID=rbmsv4-vrp
+FIREBASE_CREDENTIALS_FILE=/etc/traversex/firebase/rbmsv4.json
+TRAVERSEX_INSTANCE_ID=rbmsv4-local
+```
 
-Generate a password hash locally without placing the password in source or Git:
+Do not commit `.env`. The repository `.gitignore` already excludes it.
+
+## 5. Provision the Firebase credential file
+
+Obtain the service-account JSON from the Firebase project administrator using
+an approved secure transfer. Do not paste it into GitHub, the browser, chat,
+or a public folder.
+
+If the downloaded file is `/home/your-user/Downloads/firebase-service-account.json`,
+install it with restricted permissions:
 
 ```bash
+sudo install -o root -g traversex -m 0640 \
+  /home/your-user/Downloads/firebase-service-account.json \
+  /etc/traversex/firebase/project-a.json
+sudo -u traversex test -r /etc/traversex/firebase/project-a.json
+```
+
+The last command must finish without output or error. Use the exact path in
+`FIREBASE_CREDENTIALS_FILE` and in the Admin project's credential reference.
+
+## 6. Create the first Admin account
+
+Load the local environment and bootstrap an Admin password. The password is
+used only for this command and is not written to the repository:
+
+```bash
+set -a
+. ./.env
+set +a
 export TRAVERSEX_BOOTSTRAP_USERNAME=admin
-export TRAVERSEX_BOOTSTRAP_PASSWORD='[SET_LOCALLY_ONLY]'
+read -rsp "TraverseX Admin password: " TRAVERSEX_BOOTSTRAP_PASSWORD
+printf '\n'
 npm run bootstrap-admin
-unset TRAVERSEX_BOOTSTRAP_PASSWORD
+unset TRAVERSEX_BOOTSTRAP_USERNAME TRAVERSEX_BOOTSTRAP_PASSWORD
 ```
 
-The script stores only a scrypt hash and sets `must_change_password=1`; the password is never recorded in this repository. Change the initial password immediately after first login.
+Use a password of at least 8 characters. Change it immediately after the
+first login.
 
-## 4. Configure Firebase
+## 7. Register the project and collections
 
-Place the service-account JSON at the protected path in `FIREBASE_CREDENTIALS_FILE` for the initial control setup. Set `FIREBASE_PROJECT_ID` to the intended Firebase project. Each registered project is then configured from Admin with its own Firebase project ID and credential reference; browser pages never receive a service-account key.
-
-## 5. Register the project's own MySQL target
-
-The TraverseX database (`DATABASE_*`) is the control database only. It stores the project registry, collection registry, authentication records, and operational reports. It is not the projection target for a registered project.
-
-In **Active registered projects**, use the edit action and provide the registered project's:
-
-- Firebase project ID and service-account file reference;
-- MySQL host and port;
-- MySQL database name;
-- MySQL username and password.
-
-TraverseX encrypts the registered MySQL password with AES-256-GCM using the local `SESSION_SECRET`; only ciphertext is stored in `traversex_project`. The password is never rendered in the project table, returned by the API, or written to logs. During worker startup, TraverseX loads the active project by `TRAVERSEX_INSTANCE_ID`, verifies a connection to that registered MySQL database, and opens Firebase using that project's Firebase configuration. If any target setting is missing or invalid, the worker is not ready and does not fall back to the control database.
-
-## 6. Run the web portal/admin
+For the RBMSv4 sample registry, run:
 
 ```bash
-set -a; . ./.env; set +a
+set -a
+. ./.env
+set +a
+npm run seed-rbmsv4
+```
+
+For a different Firebase project, skip that command and register the project
+and collections from the Admin page.
+
+Start the web page temporarily for configuration:
+
+```bash
+set -a
+. ./.env
+set +a
 npm start
 ```
 
-Open `/admin/login` for configuration and `/portal` for analytics. The global top loading bar and modal header status are driven by the real request lifecycle and clear in `finally` on success or error.
+Open `http://127.0.0.1:8085/admin/login`, sign in, and edit the registered
+project. Enter all of the following:
 
-## 7. Install one worker per project
+1. the Firebase project ID;
+2. the credential reference, for example
+   `/etc/traversex/firebase/rbmsv4.json`;
+3. the **separate target MySQL** host, port, database, username, and password;
+4. the collections that this worker is allowed to monitor.
 
-Copy `systemd/traversex@.service` to `/etc/systemd/system/`, create `/etc/traversex/project-a.env`, then:
+The TraverseX control database is only for registry, authentication, runtime,
+and event reports. It must not be used as the registered project's projection
+target. Stop the temporary web process with `Ctrl+C` after saving the project.
+
+## 8. Install the persistent systemd services
+
+Copy the local `.env` into root-owned environment files. The worker instance
+name must match `TRAVERSEX_INSTANCE_ID` and the `project_key` in the Admin
+registry:
 
 ```bash
+sudo install -o root -g traversex -m 0640 .env /etc/traversex/web.env
+sudo install -o root -g traversex -m 0640 .env /etc/traversex/rbmsv4-local.env
+sudo chown -R traversex:traversex /var/www/html/traverseX
+sudo install -o root -g root -m 0644 \
+  systemd/traversex-web.service /etc/systemd/system/traversex-web.service
+sudo install -o root -g root -m 0644 \
+  systemd/traversex@.service /etc/systemd/system/traversex@.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now traversex@project-a
-systemctl status traversex@project-a
+sudo systemctl enable --now traversex-web.service
+sudo systemctl enable --now traversex@rbmsv4-local.service
 ```
 
-The Admin restart button calls `systemctl restart traversex@<instance>`. For a web process to use that button, install a narrowly scoped root-owned sudoers rule for the web service account (or run Admin behind a local operator proxy). Do not grant general sudo access and do not put a sudo password in PHP/JavaScript. Without that rule the button returns the safe technical code `restart_not_permitted`.
+The service units use `/usr/bin/env node`, so they work whether Node.js is
+installed at `/usr/bin/node` or `/usr/local/bin/node`.
 
-For the local sample instance, install `systemd/traversex-sudoers` only after confirming the web process account is `janzter`. It permits only restart and status checks for `traversex@rbmsv4-local.service`.
+For a custom project, replace every `rbmsv4-local` in this section with the
+same project key used in `TRAVERSEX_INSTANCE_ID` and in the Admin registry.
 
-The worker contract is intentionally conservative: registry is loaded at startup/manual reload/recovery; no 30-second full Firestore rescan. Every active Collection Monitor entry uses the same generic projection engine. A missing target table is created from the current Firebase document, and a schema change is healed by the backup/rebuild process documented in `docs/AUTO-SCHEMA-HEALING.md`. There is no `NOT_CONFIGURED` projection branch.
+## 9. Verify the installation
 
-For a persistent install, copy `systemd/traversex-web.service` and `systemd/traversex@.service` to `/etc/systemd/system/`, create `/etc/traversex/web.env` and one environment file per worker, then enable both the web service and the worker instance. The restart button is deliberately least-privilege: it needs a root-owned sudoers rule allowing only `systemctl restart traversex@<approved-instance>.service` for the web service account. Never grant general sudo and never put a sudo password in the web application.
+Run each check and confirm the expected result:
 
-## Operational rules
+```bash
+curl --fail http://127.0.0.1:8085/healthz
+systemctl is-active traversex-web.service
+systemctl is-active traversex@rbmsv4-local.service
+sudo journalctl -u traversex-web.service -n 30 --no-pager
+sudo journalctl -u traversex@rbmsv4-local.service -n 50 --no-pager
+```
 
-- Firebase is authoritative; MySQL is a projection and report store.
-- New Firebase documents use the real Firestore document ID and matching `*_key`.
-- Only `PENDING` mutations are eligible for projection; acknowledge only after exact MySQL read-back.
-- Keep retries and dead letters in MySQL reports; never store passwords, service-account JSON, or tokens in logs.
-- Schema healing is additive and reviewable. Never silently drop production tables or collections.
+The health check should return JSON containing `"ok":true`. Both services
+should report `active`. The worker log should say that it is ready for the
+registered project and should report its active listener count.
 
-Each worker instance is one registered project (`TRAVERSEX_INSTANCE_ID` matches `traversex_project.project_key`). This prevents a worker from projecting one Firebase project into another project's database. The worker listens only to the registered project's `PENDING` documents and acknowledges only after the generic projection has completed an exact MySQL read-back. A registered collection does not need a separately coded adapter.
+Run the repository checks when validating a code update:
 
-## 8. Seed the RBMSv4 sample registry
+```bash
+npm run check
+npm --prefix ui run lint
+git diff --check
+```
 
-After the schema and admin bootstrap are complete, run `npm run seed-rbmsv4` from the TraverseX directory. This adds the verified RBMSv4 Firebase project ID and curated collection monitor list to TraverseX's own MySQL database. It stores only a credential path reference (`/etc/traversex/firebase/rbmsv4.json` by default); it does not copy a service-account key or read Firebase documents. Override `RBMSV4_FIREBASE_PROJECT_ID`, `RBMSV4_PROJECT_KEY`, or `RBMSV4_CREDENTIAL_REF` for another instance.
+A running service alone is not proof of a successful projection. For a real
+Firebase document, verify the complete lifecycle in Admin activity and in the
+registered target database:
 
-The seeded runtime remains `NOT_READY` until the credential file is provisioned separately and the worker preflight succeeds. Once the worker starts, it writes `STARTING` and then `RUNNING` plus `last_heartbeat_at` to `traversex_runtime`; listener snapshots update the Firebase-read and pending counters, successful projections update `processed_count`, and projection/listener failures write `ERROR` with a safe code and description. Registry and portal pages read TraverseX MySQL only, so viewing them performs zero Firestore reads. Collections are loaded at worker startup or manual reload/recovery, not by a periodic full scan.
+```text
+Firebase PENDING -> worker receives change -> target MySQL row -> exact
+read-back -> Firebase SYNCED -> target mysql_sync_status=SYNCED
+```
+
+## 10. Troubleshooting
+
+### `registered_project_not_found`
+
+`TRAVERSEX_INSTANCE_ID` does not match an ACTIVE `project_key` in the
+`traversex_project` table. Correct the instance environment file and restart
+only that worker:
+
+```bash
+sudo systemctl restart traversex@rbmsv4-local.service
+```
+
+### `registered_project_mysql_configuration_missing`
+
+The registered project's target MySQL fields are incomplete. Open Admin,
+edit the project, and save the target host, port, database, username, and
+password. TraverseX must never fall back to the control database.
+
+### `firebase_credentials_missing`
+
+The credential file does not exist or is unreadable by `traversex`. Check:
+
+```bash
+sudo ls -l /etc/traversex/firebase/project-a.json
+sudo -u traversex test -r /etc/traversex/firebase/project-a.json
+```
+
+### `ER_ACCESS_DENIED_ERROR` or `ER_BAD_DB_ERROR`
+
+Check `DATABASE_*` in `/etc/traversex/web.env` and the target MySQL settings
+stored for the registered project. Do not put a database password in a Git
+commit or command-line argument.
+
+### Admin restart button says `restart_not_permitted`
+
+The service can still run normally. The button needs a narrowly scoped
+root-owned sudoers rule for the exact worker instance. Create a new rule for
+the new PC's web-service account and instance; do not grant general sudo.
+
+## Security and data boundaries
+
+- Firebase is authoritative for application mutations.
+- Registered project MySQL databases are projections; the TraverseX control
+  database is not a projection fallback.
+- Firebase document IDs and matching `*_key` fields must remain consistent.
+- Do not upload `.env`, service-account JSON, passwords, tokens, logs with
+  private document IDs, or `node_modules`.
+- Schema healing creates a recoverable backup before a rebuild. Never drop a
+  production table or Firebase collection as an installation shortcut.
