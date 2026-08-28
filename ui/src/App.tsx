@@ -140,6 +140,11 @@ const emptyCollection: CollectionDraft = {
 
 async function request(path: string, options?: RequestInit) {
   const response = await fetch(path, { credentials: 'same-origin', ...options })
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.includes('application/json')) {
+    if (response.url.includes('/admin/login')) window.location.assign('/admin/login')
+    throw new Error('session_expired')
+  }
   const data = await response.json().catch(() => ({ ok: false, error: 'invalid_server_response' }))
   if (!response.ok || data.ok === false) {
     const detail = typeof data.detail === 'object' && data.detail
