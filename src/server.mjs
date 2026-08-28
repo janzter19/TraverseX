@@ -151,6 +151,7 @@ app.get('/admin/api/dashboard', auth, async (_req, res) => {
     ]);
     return json(res, 200, { ok: true, projects, collections, runtime, instance_id: config.instanceId, csrf_token: req.session.csrfToken ?? null });
   } catch (error) {
+    console.error('dashboard_load_failed', safeError(error));
     return json(res, 500, { ok: false, error: safeError(error) });
   }
 });
