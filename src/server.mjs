@@ -5,7 +5,7 @@ import mysql from 'mysql2/promise';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from './config.mjs';
-import { createProjectPool, query } from './db.mjs';
+import { createProjectPool, pool, query } from './db.mjs';
 import { pendingQueueTableSql } from './pending-queue.mjs';
 import { getFirebaseDbForProject } from './firebase.mjs';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -103,12 +103,18 @@ app.post('/admin/login', async (req, res) => {
     const rows = await query('SELECT xId, username, password_hash, user_status FROM traversex_admin_user WHERE username = ? LIMIT 1', [String(req.body.username ?? '')]);
     const user = rows[0];
     if (!user || user.user_status !== 'ACTIVE' || !verifyPassword(String(req.body.password ?? ''), user.password_hash)) return json(res, 401, { ok: false, error: 'invalid_credentials' });
-    const token = crypto.randomBytes(32).toString('hex'); sessions.set(token, { xId: user.xId, expires: Date.now() + 8 * 60 * 60 * 1000 });
+    const token = crypto.randomBytes(32).toString('hex');
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    sessions.set(token, { xId: user.xId, csrfToken, expires: Date.now() + 8 * 60 * 60 * 1000 });
     res.setHeader('Set-Cookie', `tx_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800`); return json(res, 200, { ok: true, redirect: '/admin' });
   } catch (error) { return json(res, 500, { ok: false, error: safeError(error) }); }
 });
 
 const auth = (req, res, next) => { const token = (req.headers.cookie ?? '').match(/(?:^|; )tx_session=([^;]+)/)?.[1]; const session = token && sessions.get(token); if (!session || session.expires < Date.now()) return res.redirect('/admin/login'); req.session = session; next(); };
+const csrfMatches = (provided, expected) => {
+  if (typeof provided !== 'string' || typeof expected !== 'string' || provided.length !== expected.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+};
 const dashboardPath = new URL('../public/dashboard/index.html', import.meta.url).pathname;
 app.get('/admin', auth, (_req, res, next) => {
   if (fs.existsSync(dashboardPath)) return res.sendFile(dashboardPath);
@@ -137,7 +143,7 @@ app.get('/admin/api/dashboard', auth, async (_req, res) => {
           GROUP BY project_xId
         ) q ON q.project_xId = r.project_xId`)
     ]);
-    return json(res, 200, { ok: true, projects, collections, runtime, instance_id: config.instanceId });
+    return json(res, 200, { ok: true, projects, collections, runtime, instance_id: config.instanceId, csrf_token: req.session.csrfToken ?? null });
   } catch (error) {
     return json(res, 500, { ok: false, error: safeError(error) });
   }
@@ -178,6 +184,35 @@ app.get('/admin/api/collection-logs', auth, async (req, res) => {
     return json(res, 200, { ok: true, logs: rows });
   } catch (error) {
     return json(res, 500, { ok: false, error: safeError(error) });
+  }
+});
+app.post('/admin/api/clear-logs', auth, async (req, res) => {
+  if (!csrfMatches(String(req.headers['x-csrf-token'] ?? ''), req.session.csrfToken)) return json(res, 403, { ok: false, error: 'csrf_validation_failed' });
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    const [collections] = await connection.execute(`UPDATE traversex_collection
+      SET last_event_xId = NULL,
+          last_event_change_type = NULL,
+          last_event_document_id = NULL,
+          last_event_status = NULL,
+          last_event_attempt_count = NULL,
+          last_event_recorded_at = NULL`);
+    const [events] = await connection.execute('DELETE FROM traversex_collection_event');
+    await connection.commit();
+    return json(res, 200, {
+      ok: true,
+      cleared: {
+        collection_events: Number(events.affectedRows ?? 0),
+        collection_cache_rows: Number(collections.affectedRows ?? 0),
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    return json(res, 500, { ok: false, error: safeError(error) });
+  } finally {
+    connection?.release();
   }
 });
 app.post('/admin/projects/test-mysql', auth, async (req, res) => {

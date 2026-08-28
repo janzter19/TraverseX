@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Sun,
   TestTube2,
+  Trash2,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -92,7 +93,7 @@ type Runtime = {
   last_error_description?: string | null
 }
 
-type Dashboard = { projects: Project[]; collections: Collection[]; runtime: Runtime[]; instance_id?: string }
+type Dashboard = { projects: Project[]; collections: Collection[]; runtime: Runtime[]; instance_id?: string; csrf_token?: string | null }
 type CollectionEvent = {
   xId: number
   firebase_collection: string
@@ -197,6 +198,8 @@ function App() {
   const [collectionLogs, setCollectionLogs] = useState<CollectionEvent[]>([])
   const [collectionLogsBusy, setCollectionLogsBusy] = useState(false)
   const [collectionLogsError, setCollectionLogsError] = useState('')
+  const [clearLogsDialog, setClearLogsDialog] = useState(false)
+  const [clearLogsBusy, setClearLogsBusy] = useState(false)
   const [serviceMetricDialog, setServiceMetricDialog] = useState<ServiceMetricKey | null>(null)
 
   const load = useCallback(async (silent = false) => {
@@ -437,6 +440,32 @@ function App() {
     }
   }
 
+  async function clearLogs() {
+    if (!data.csrf_token) {
+      setNotice({ tone: 'error', text: 'Clear logs is unavailable until the Admin session is refreshed.' })
+      return
+    }
+    setClearLogsBusy(true)
+    setNotice(null)
+    try {
+      const result = await request('/admin/api/clear-logs', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': data.csrf_token },
+      }) as { cleared?: { collection_events?: number; collection_cache_rows?: number } }
+      setClearLogsDialog(false)
+      setCollectionLogs([])
+      setNotice({
+        tone: 'success',
+        text: `Cleared ${result.cleared?.collection_events ?? 0} event log(s) and reset ${result.cleared?.collection_cache_rows ?? 0} collection cache row(s).`,
+      })
+      await load(true)
+    } catch (error) {
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'clear_logs_failed' })
+    } finally {
+      setClearLogsBusy(false)
+    }
+  }
+
   return (
     <div className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <div
@@ -654,6 +683,18 @@ function App() {
               >
                 <RefreshCw className={cn('size-4', collectionLogsBusy && 'animate-spin')} />
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="size-9 shrink-0 text-destructive hover:text-destructive"
+                onClick={() => setClearLogsDialog(true)}
+                disabled={collectionLogsBusy || clearLogsBusy}
+                aria-label="Clear all collection logs"
+                title="Clear all collection logs"
+              >
+                <Trash2 className="size-4" />
+              </Button>
             </div>
           </DialogHeader>
           <div className="min-h-0 flex-1 overflow-auto px-6 py-5">
@@ -666,6 +707,27 @@ function App() {
                   : <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">No activity recorded for this collection.</div>}
           </div>
           <DialogFooter className="shrink-0 border-t px-6 py-4"><span className="mr-auto text-xs text-muted-foreground">Read from TraverseX MySQL only.</span><DialogClose asChild><Button type="button" variant="outline">Close</Button></DialogClose></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={clearLogsDialog} onOpenChange={(open) => { if (!clearLogsBusy) setClearLogsDialog(open) }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Trash2 className="size-4 text-destructive" />Clear all collection logs?</DialogTitle>
+            <DialogDescription>
+              This permanently deletes all rows from <code>traversex_collection_event</code> and clears the latest-event fields in <code>traversex_collection</code>. Firebase documents, projection tables, and pending queue records will not be changed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
+            This action cannot be undone. Confirm only if you have already reviewed the current activity logs.
+          </div>
+          <DialogFooter>
+            <DialogClose asChild><Button type="button" variant="outline" disabled={clearLogsBusy}>Cancel</Button></DialogClose>
+            <Button type="button" variant="destructive" onClick={() => void clearLogs()} disabled={clearLogsBusy || !data.csrf_token}>
+              {clearLogsBusy && <Loader2 className="size-4 animate-spin" />}
+              Clear all logs
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
