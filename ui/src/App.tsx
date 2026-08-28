@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Gauge,
   Loader2,
+  LogOut,
   Moon,
   Pencil,
   Plus,
@@ -200,6 +201,7 @@ function App() {
   const [collectionLogsError, setCollectionLogsError] = useState('')
   const [clearLogsDialog, setClearLogsDialog] = useState(false)
   const [clearLogsBusy, setClearLogsBusy] = useState(false)
+  const [logoutBusy, setLogoutBusy] = useState(false)
   const [serviceMetricDialog, setServiceMetricDialog] = useState<ServiceMetricKey | null>(null)
 
   const load = useCallback(async (silent = false) => {
@@ -466,6 +468,20 @@ function App() {
     }
   }
 
+  async function logout() {
+    setLogoutBusy(true)
+    try {
+      await request('/admin/logout', {
+        method: 'POST',
+        headers: { 'X-CSRF-Token': data.csrf_token ?? '' },
+      })
+      window.location.assign('/admin/login')
+    } catch (error) {
+      setLogoutBusy(false)
+      setNotice({ tone: 'error', text: error instanceof Error ? error.message : 'logout_failed' })
+    }
+  }
+
   return (
     <div className="flex h-svh min-h-0 flex-col overflow-hidden bg-background text-foreground">
       <div
@@ -497,6 +513,16 @@ function App() {
             </Button>
             <Button variant="outline" size="icon" onClick={() => void load()} disabled={busy} aria-label="Refresh dashboard" title="Refresh dashboard">
               <RefreshCw className={cn('size-4', busy && 'animate-spin')} />
+            </Button>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => void logout()}
+              disabled={busy || logoutBusy}
+              aria-label="Log out"
+              title="Log out"
+            >
+              <LogOut className={cn('size-4', logoutBusy && 'animate-pulse')} />
             </Button>
           </div>
         </div>

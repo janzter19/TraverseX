@@ -110,11 +110,17 @@ app.post('/admin/login', async (req, res) => {
   } catch (error) { return json(res, 500, { ok: false, error: safeError(error) }); }
 });
 
-const auth = (req, res, next) => { const token = (req.headers.cookie ?? '').match(/(?:^|; )tx_session=([^;]+)/)?.[1]; const session = token && sessions.get(token); if (!session || session.expires < Date.now()) return res.redirect('/admin/login'); req.session = session; next(); };
+const auth = (req, res, next) => { const token = (req.headers.cookie ?? '').match(/(?:^|; )tx_session=([^;]+)/)?.[1]; const session = token && sessions.get(token); if (!session || session.expires < Date.now()) return res.redirect('/admin/login'); req.session = session; req.sessionToken = token; next(); };
 const csrfMatches = (provided, expected) => {
   if (typeof provided !== 'string' || typeof expected !== 'string' || provided.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
 };
+app.post('/admin/logout', auth, (req, res) => {
+  if (!csrfMatches(String(req.headers['x-csrf-token'] ?? ''), req.session.csrfToken)) return json(res, 403, { ok: false, error: 'csrf_validation_failed' });
+  sessions.delete(req.sessionToken);
+  res.setHeader('Set-Cookie', 'tx_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
+  return json(res, 200, { ok: true, redirect: '/admin/login' });
+});
 const dashboardPath = new URL('../public/dashboard/index.html', import.meta.url).pathname;
 app.get('/admin', auth, (_req, res, next) => {
   if (fs.existsSync(dashboardPath)) return res.sendFile(dashboardPath);
