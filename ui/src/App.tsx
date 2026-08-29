@@ -606,7 +606,7 @@ function App() {
         </div>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
+      <main className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
         <div className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-6 lg:px-8 lg:py-8">
           <section>
             <div className="flex flex-wrap items-end justify-between gap-3">
@@ -671,7 +671,21 @@ function App() {
                   <CardFooter className="justify-between border-t pt-4 text-xs text-muted-foreground"><span>{selectedCollections.length} collection{selectedCollections.length === 1 ? '' : 's'} monitored</span><span>Firebase is read by the worker.</span></CardFooter>
                 </Card>
                 <Card className="min-w-0 xl:col-span-4">
-                  <CardHeader><CardTitle className="flex items-center gap-2 text-base"><ServerCog className="size-4 text-primary" />Service control</CardTitle><CardDescription>Restart only this isolated TraverseX worker instance.</CardDescription></CardHeader>
+                  <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
+                    <div className="min-w-0"><CardTitle className="flex items-center gap-2 text-base"><ServerCog className="size-4 text-primary" />Service control</CardTitle><CardDescription>Restart only this isolated TraverseX worker instance.</CardDescription></div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="shrink-0 text-destructive hover:text-destructive"
+                      onClick={() => setClearLogsDialog(true)}
+                      disabled={busy || clearLogsBusy || !data.csrf_token}
+                      aria-label="Clear logs"
+                      title="Clear logs"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </CardHeader>
                   <CardContent className="space-y-4">
                     <div className="space-y-3">
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
