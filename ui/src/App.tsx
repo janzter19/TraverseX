@@ -117,6 +117,7 @@ type ServiceMetricDetails = {
   value: string | number
   rows: { label: string; value: string | number }[]
   collections?: Collection[]
+  listenerTargets?: { name: string; source: string; status: string }[]
 }
 
 const emptyProject: ProjectDraft = {
@@ -253,6 +254,16 @@ function App() {
     if (!serviceMetricDialog) return null
     const runtime = selectedRuntime
     const lastEvent = latestCollectionEvent
+    const listenerTargets = [
+      ...selectedCollections.map((collection) => ({
+        name: collection.firebase_collection,
+        source: 'Registered collection',
+        status: collection.traverse_status,
+      })),
+      ...(selectedCollections.some((collection) => collection.firebase_collection === 'project_test')
+        ? []
+        : [{ name: 'project_test', source: 'Built-in diagnostics listener', status: 'ACTIVE' }]),
+    ]
     const common = [
       { label: 'Project', value: selectedProject?.project_name ?? 'No project selected' },
       { label: 'Project xId', value: selectedProject?.xId ?? '—' },
@@ -284,9 +295,10 @@ function App() {
       },
       listeners: {
         title: 'Active listeners',
-        description: 'Listener activity reported for this registered project.',
+        description: 'The current value is active Firebase listener subscriptions versus expected listener targets. The list below shows the targets included in that count.',
         value: `${runtime?.listener_count ?? 0}/${runtime?.active_collection_count ?? 0}`,
-        rows: [...common, { label: 'Listener documents', value: runtime?.listener_count ?? 0 }, { label: 'Active collection listeners', value: runtime?.active_collection_count ?? 0 }, { label: 'Collections shown here', value: selectedCollections.length }],
+        rows: [],
+        listenerTargets,
       },
       lastEvent: {
         title: 'Last recorded event',
@@ -310,7 +322,7 @@ function App() {
       },
     }
     return details[serviceMetricDialog]
-  }, [errorCollections, latestCollectionEvent, retryCollections, selectedCollections.length, selectedProject, selectedRuntime, serviceMetricDialog])
+  }, [errorCollections, latestCollectionEvent, retryCollections, selectedCollections, selectedProject, selectedRuntime, serviceMetricDialog])
   const serviceUnit = `traversex@${data.instance_id ?? selectedProject?.project_key ?? 'project-a'}.service`
   const selectedMysqlTarget = selectedProject
     ? `${selectedProject.mysql_database || 'Database not configured'} · ${selectedProject.mysql_host || 'host unavailable'}${selectedProject.mysql_port ? `:${selectedProject.mysql_port}` : ''}`
@@ -774,9 +786,17 @@ function App() {
                 <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Current value</p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">{serviceMetricDetails.value}</p>
               </div>
-              <dl className="mt-5 divide-y rounded-md border">
+              {serviceMetricDetails.rows.length > 0 && <dl className="mt-5 divide-y rounded-md border">
                 {serviceMetricDetails.rows.map((row) => <div key={row.label} className="grid gap-1 px-4 py-3 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4"><dt className="text-xs text-muted-foreground">{row.label}</dt><dd className="break-words text-sm">{row.value}</dd></div>)}
-              </dl>
+              </dl>}
+              {serviceMetricDetails.listenerTargets && <div className="mt-5 overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader><TableRow><TableHead>Listener target</TableHead><TableHead>Source</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                  <TableBody>
+                    {serviceMetricDetails.listenerTargets.map((target) => <TableRow key={target.name}><TableCell className="font-medium">{target.name}</TableCell><TableCell className="text-xs text-muted-foreground">{target.source}</TableCell><TableCell><Badge variant={statusVariant(target.status)}>{target.status}</Badge></TableCell></TableRow>)}
+                  </TableBody>
+                </Table>
+              </div>}
               {serviceMetricDetails.collections && <div className="mt-5 overflow-x-auto rounded-md border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Collection / table</TableHead><TableHead>Event ID</TableHead><TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Document</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader>
