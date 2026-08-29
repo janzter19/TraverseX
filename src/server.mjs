@@ -177,6 +177,24 @@ app.get('/admin/api/pending-queue', auth, async (req, res) => {
     return json(res, 500, { ok: false, error: safeError(error) });
   }
 });
+app.get('/admin/api/read-events', auth, async (req, res) => {
+  try {
+    const projectXId = Number(req.query.project_xId);
+    if (!Number.isInteger(projectXId) || projectXId < 1) return json(res, 400, { ok: false, error: 'invalid_project_id' });
+    const limit = Math.min(Math.max(Number(req.query.limit ?? 200), 1), 200);
+    const rows = await query(`SELECT e.xId, e.firebase_collection, e.firebase_document_id, e.firebase_change_type,
+      e.event_status, e.attempt_count, e.error_code, e.error_description,
+      e.firebase_event_at, e.traverse_recorded_at
+      FROM traversex_collection_event e
+      JOIN traversex_runtime r ON r.project_xId = e.project_xId
+      WHERE e.project_xId = ?
+        AND (r.last_restart_at IS NULL OR e.traverse_recorded_at >= r.last_restart_at)
+      ORDER BY e.traverse_recorded_at DESC, e.xId DESC LIMIT ${limit}`, [projectXId]);
+    return json(res, 200, { ok: true, rows });
+  } catch (error) {
+    return json(res, 500, { ok: false, error: safeError(error) });
+  }
+});
 app.get('/admin/api/collection-logs', auth, async (req, res) => {
   try {
     const collectionXId = Number(req.query.collection_xId);

@@ -225,6 +225,9 @@ function App() {
   const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([])
   const [pendingDocumentsBusy, setPendingDocumentsBusy] = useState(false)
   const [pendingDocumentsError, setPendingDocumentsError] = useState('')
+  const [readEvents, setReadEvents] = useState<CollectionEvent[]>([])
+  const [readEventsBusy, setReadEventsBusy] = useState(false)
+  const [readEventsError, setReadEventsError] = useState('')
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setBusy(true)
@@ -259,13 +262,31 @@ function App() {
     }
   }
 
+  async function loadReadEvents(projectXId: number) {
+    setReadEventsBusy(true)
+    setReadEventsError('')
+    try {
+      const result = await request(`/admin/api/read-events?project_xId=${encodeURIComponent(projectXId)}&limit=200`) as { rows?: CollectionEvent[] }
+      setReadEvents(result.rows ?? [])
+    } catch (error) {
+      setReadEvents([])
+      setReadEventsError(error instanceof Error ? error.message : 'read_events_failed')
+    } finally {
+      setReadEventsBusy(false)
+    }
+  }
+
   function openServiceMetric(metric: ServiceMetricKey) {
     setServiceMetricDialog(metric)
     if (metric === 'pending' && selectedProjectId !== null) {
       void loadPendingDocuments(selectedProjectId)
+    } else if (metric === 'reads' && selectedProjectId !== null) {
+      void loadReadEvents(selectedProjectId)
     } else {
       setPendingDocuments([])
       setPendingDocumentsError('')
+      setReadEvents([])
+      setReadEventsError('')
     }
   }
 
@@ -323,9 +344,9 @@ function App() {
       },
       reads: {
         title: 'Firebase reads',
-        description: 'Firestore document changes received by TraverseX listeners during the current worker run.',
+        description: 'Document-change notifications received from the PENDING-only Firebase listeners during the current worker run. The table below shows their MySQL-recorded outcomes; acknowledgement-only removals do not create projection events.',
         value: runtime?.firebase_reads ?? 0,
-        rows: [...common, { label: 'Reads this run', value: runtime?.firebase_reads ?? 0 }, { label: 'Listener scope', value: 'Registered ACTIVE collections, PENDING documents only' }, { label: 'Dashboard reads', value: '0 Firebase reads; report is read from TraverseX MySQL' }],
+        rows: [],
       },
       processed: {
         title: 'Processed projections',
@@ -815,7 +836,7 @@ function App() {
       </Dialog>
 
       <Dialog open={serviceMetricDialog !== null} onOpenChange={(open) => { if (!open) setServiceMetricDialog(null) }}>
-        <DialogContent className={cn('max-h-[min(90svh,760px)] max-w-xl overflow-hidden p-0', serviceMetricDialog === 'pending' && 'max-w-5xl')}>
+        <DialogContent className={cn('max-h-[min(90svh,760px)] max-w-xl overflow-hidden p-0', ['pending', 'reads'].includes(serviceMetricDialog ?? '') && 'max-w-5xl')}>
           {serviceMetricDetails && <>
             <DialogHeader className="border-b px-6 py-5">
               <DialogTitle className="flex items-center gap-2"><Gauge className="size-4 text-primary" />{serviceMetricDetails.title}</DialogTitle>
@@ -837,6 +858,15 @@ function App() {
                     : pendingDocuments.length
                       ? <Table><TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Firebase document</TableHead><TableHead>State</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>First seen</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{pendingDocuments.map((pending) => <TableRow key={pending.xId}><TableCell className="font-medium">{pending.firebase_collection}<span className="mt-1 block text-xs text-muted-foreground">Queue #{pending.xId}</span></TableCell><TableCell className="max-w-56 truncate font-mono text-xs" title={pending.firebase_document_id}>{pending.firebase_document_id}</TableCell><TableCell><Badge variant={statusVariant(pending.pending_state)}>{pending.pending_state}</Badge></TableCell><TableCell className="tabular-nums">{pending.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={pending.error_code ? 'text-destructive' : 'text-muted-foreground'}>{pending.error_code ?? 'Waiting for retry'}</span><div className="mt-1 text-muted-foreground">{pending.error_description ?? 'No error description'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.first_seen_at}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.updated_at}</TableCell></TableRow>)}</TableBody></Table>
                       : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No pending documents.</div>}
+              </div>}
+              {serviceMetricDialog === 'reads' && <div className="mt-5 overflow-x-auto rounded-md border">
+                {readEventsBusy
+                  ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading read documents…</div>
+                  : readEventsError
+                    ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{readEventsError}</div>
+                    : readEvents.length
+                      ? <Table><TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Firebase document</TableHead><TableHead>Change</TableHead><TableHead>Outcome</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>Firebase event</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader><TableBody>{readEvents.map((event) => <TableRow key={event.xId}><TableCell className="font-medium">{event.firebase_collection}<span className="mt-1 block text-xs text-muted-foreground">Event #{event.xId}</span></TableCell><TableCell className="max-w-56 truncate font-mono text-xs" title={event.firebase_document_id}>{event.firebase_document_id}</TableCell><TableCell><Badge variant="outline">{event.firebase_change_type}</Badge></TableCell><TableCell><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></TableCell><TableCell className="tabular-nums">{event.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={event.error_code ? 'text-destructive' : 'text-muted-foreground'}>{event.error_code ?? 'No error'}</span><div className="mt-1 text-muted-foreground">{event.error_description ?? 'No error description'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.traverse_recorded_at}</TableCell></TableRow>)}</TableBody></Table>
+                      : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No recorded read documents.</div>}
               </div>}
               {serviceMetricDetails.listenerTargets && <div className="mt-5 overflow-x-auto rounded-md border">
                 <Table>

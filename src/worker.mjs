@@ -515,7 +515,10 @@ const listeners = registeredCollections.map((registry) => {
     .where('mysql_sync_status', '==', 'PENDING')
     .onSnapshot(async (snapshot) => {
       const changes = snapshot.docChanges();
-      firebaseReads += changes.length;
+      // A removed notification only means that an already-read document left
+      // the PENDING query after acknowledgement; it is not another document
+      // read. Count only document deliveries from the pending-only query.
+      firebaseReads += changes.filter((change) => change.type !== 'removed').length;
       listenerSizes.set(registry.firebase_collection, snapshot.size);
       pendingQueue = [...listenerSizes.values()].reduce((total, size) => total + size, 0);
       try {
