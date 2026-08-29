@@ -628,7 +628,7 @@ function App() {
               <Button size="icon" onClick={() => openProject()} title="Add project"><Plus className="size-4" /></Button>
             </CardHeader>
             <CardContent className="pt-0">
-              <div className="overflow-x-auto">
+              <div>
                 <Table>
                   <TableHeader><TableRow><TableHead>Project</TableHead><TableHead>Firebase</TableHead><TableHead>MySQL target</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -657,7 +657,7 @@ function App() {
                     <Button size="icon" onClick={() => openCollection()} title="Add collection monitor"><Plus className="size-4" /></Button>
                   </CardHeader>
                   <CardContent className="pt-0">
-                    <div className="overflow-x-auto">
+                    <div>
                       <Table>
                         <TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Last change</TableHead><TableHead>Document</TableHead><TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Recorded</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
                         <TableBody>
@@ -807,7 +807,7 @@ function App() {
               : collectionLogsError
                 ? <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{collectionLogsError}</div>
                 : collectionLogs.length
-                  ? <div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Event ID</TableHead><TableHead>Change</TableHead><TableHead>Document</TableHead><TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>Firebase event</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader><TableBody>{collectionLogs.map((event) => <TableRow key={event.xId}><TableCell className="font-mono text-xs">#{event.xId}</TableCell><TableCell><Badge variant="outline">{event.firebase_change_type}</Badge></TableCell><TableCell className="max-w-52 truncate font-mono text-xs" title={event.firebase_document_id}>{event.firebase_document_id}</TableCell><TableCell><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></TableCell><TableCell className="tabular-nums">{event.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={event.error_code ? 'text-destructive' : 'text-muted-foreground'}>{event.error_code ?? '—'}</span><div className="mt-1 text-muted-foreground">{event.error_description ?? 'No error'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.traverse_recorded_at}</TableCell></TableRow>)}</TableBody></Table></div>
+                  ? <div><Table><TableHeader><TableRow><TableHead>Event ID</TableHead><TableHead>Change</TableHead><TableHead>Document</TableHead><TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>Firebase event</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader><TableBody>{collectionLogs.map((event) => <TableRow key={event.xId}><TableCell className="font-mono text-xs">#{event.xId}</TableCell><TableCell><Badge variant="outline">{event.firebase_change_type}</Badge></TableCell><TableCell className="max-w-52 truncate font-mono text-xs" title={event.firebase_document_id}>{event.firebase_document_id}</TableCell><TableCell><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></TableCell><TableCell className="tabular-nums">{event.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={event.error_code ? 'text-destructive' : 'text-muted-foreground'}>{event.error_code ?? '—'}</span><div className="mt-1 text-muted-foreground">{event.error_description ?? 'No error'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.traverse_recorded_at}</TableCell></TableRow>)}</TableBody></Table></div>
                   : <div className="flex min-h-32 items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground">No activity recorded for this collection.</div>}
           </div>
           <DialogFooter className="shrink-0 border-t px-6 py-4"><span className="mr-auto text-xs text-muted-foreground">Read from TraverseX MySQL only.</span><DialogClose asChild><Button type="button" variant="outline">Close</Button></DialogClose></DialogFooter>
@@ -850,7 +850,7 @@ function App() {
               {serviceMetricDetails.rows.length > 0 && <dl className="mt-5 divide-y rounded-md border">
                 {serviceMetricDetails.rows.map((row) => <div key={row.label} className="grid gap-1 px-4 py-3 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4"><dt className="text-xs text-muted-foreground">{row.label}</dt><dd className="break-words text-sm">{row.value}</dd></div>)}
               </dl>}
-              {serviceMetricDialog === 'pending' && <div className="mt-5 overflow-x-auto rounded-md border">
+              {serviceMetricDialog === 'pending' && <div className="mt-5 rounded-md border">
                 {pendingDocumentsBusy
                   ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading pending documents…</div>
                   : pendingDocumentsError
@@ -859,7 +859,7 @@ function App() {
                       ? <Table><TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Firebase document</TableHead><TableHead>State</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>First seen</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{pendingDocuments.map((pending) => <TableRow key={pending.xId}><TableCell className="font-medium">{pending.firebase_collection}<span className="mt-1 block text-xs text-muted-foreground">Queue #{pending.xId}</span></TableCell><TableCell className="max-w-56 truncate font-mono text-xs" title={pending.firebase_document_id}>{pending.firebase_document_id}</TableCell><TableCell><Badge variant={statusVariant(pending.pending_state)}>{pending.pending_state}</Badge></TableCell><TableCell className="tabular-nums">{pending.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={pending.error_code ? 'text-destructive' : 'text-muted-foreground'}>{pending.error_code ?? 'Waiting for retry'}</span><div className="mt-1 text-muted-foreground">{pending.error_description ?? 'No error description'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.first_seen_at}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.updated_at}</TableCell></TableRow>)}</TableBody></Table>
                       : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No pending documents.</div>}
               </div>}
-              {serviceMetricDialog === 'reads' && <div className="mt-5 overflow-x-auto rounded-md border">
+              {serviceMetricDialog === 'reads' && <div className="mt-5 rounded-md border">
                 {readEventsBusy
                   ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading read documents…</div>
                   : readEventsError
@@ -868,7 +868,7 @@ function App() {
                       ? <Table><TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Firebase document</TableHead><TableHead>Change</TableHead><TableHead>Outcome</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>Firebase event</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader><TableBody>{readEvents.map((event) => <TableRow key={event.xId}><TableCell className="font-medium">{event.firebase_collection}<span className="mt-1 block text-xs text-muted-foreground">Event #{event.xId}</span></TableCell><TableCell className="max-w-56 truncate font-mono text-xs" title={event.firebase_document_id}>{event.firebase_document_id}</TableCell><TableCell><Badge variant="outline">{event.firebase_change_type}</Badge></TableCell><TableCell><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></TableCell><TableCell className="tabular-nums">{event.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={event.error_code ? 'text-destructive' : 'text-muted-foreground'}>{event.error_code ?? 'No error'}</span><div className="mt-1 text-muted-foreground">{event.error_description ?? 'No error description'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{event.traverse_recorded_at}</TableCell></TableRow>)}</TableBody></Table>
                       : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No recorded read documents.</div>}
               </div>}
-              {serviceMetricDetails.listenerTargets && <div className="mt-5 overflow-x-auto rounded-md border">
+              {serviceMetricDetails.listenerTargets && <div className="mt-5 rounded-md border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Listener target</TableHead><TableHead>Source</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
                   <TableBody>
@@ -876,7 +876,7 @@ function App() {
                   </TableBody>
                 </Table>
               </div>}
-              {serviceMetricDetails.collections && <div className="mt-5 overflow-x-auto rounded-md border">
+              {serviceMetricDetails.collections && <div className="mt-5 rounded-md border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Collection / table</TableHead><TableHead>Event ID</TableHead><TableHead>Status</TableHead><TableHead>Attempts</TableHead><TableHead>Document</TableHead><TableHead>Recorded</TableHead></TableRow></TableHeader>
                   <TableBody>
