@@ -107,6 +107,19 @@ type CollectionEvent = {
   firebase_event_at?: string | null
   traverse_recorded_at: string
 }
+type PendingDocument = {
+  xId: number
+  project_xId: number
+  collection_xId?: number | null
+  firebase_collection: string
+  firebase_document_id: string
+  pending_state: string
+  attempt_count: number
+  error_code?: string | null
+  error_description?: string | null
+  first_seen_at: string
+  updated_at: string
+}
 type ProjectDraft = Omit<Project, 'xId' | 'project_status'> & { project_status: string; mysql_password: string }
 type CollectionDraft = { project_xId: string; firebase_collection: string; traverse_status: string }
 type ServiceMetricKey = 'status' | 'pending' | 'reads' | 'processed' | 'listeners' | 'lastEvent' | 'retryCollections' | 'errorCollections'
@@ -209,6 +222,9 @@ function App() {
   const [clearLogsBusy, setClearLogsBusy] = useState(false)
   const [logoutBusy, setLogoutBusy] = useState(false)
   const [serviceMetricDialog, setServiceMetricDialog] = useState<ServiceMetricKey | null>(null)
+  const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([])
+  const [pendingDocumentsBusy, setPendingDocumentsBusy] = useState(false)
+  const [pendingDocumentsError, setPendingDocumentsError] = useState('')
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setBusy(true)
@@ -228,6 +244,30 @@ function App() {
     document.documentElement.classList.toggle('dark', darkMode)
     window.localStorage.setItem('traversex-theme', darkMode ? 'dark' : 'light')
   }, [darkMode])
+
+  async function loadPendingDocuments(projectXId: number) {
+    setPendingDocumentsBusy(true)
+    setPendingDocumentsError('')
+    try {
+      const result = await request(`/admin/api/pending-queue?project_xId=${encodeURIComponent(projectXId)}&limit=200`) as { rows?: PendingDocument[] }
+      setPendingDocuments(result.rows ?? [])
+    } catch (error) {
+      setPendingDocuments([])
+      setPendingDocumentsError(error instanceof Error ? error.message : 'pending_queue_failed')
+    } finally {
+      setPendingDocumentsBusy(false)
+    }
+  }
+
+  function openServiceMetric(metric: ServiceMetricKey) {
+    setServiceMetricDialog(metric)
+    if (metric === 'pending' && selectedProjectId !== null) {
+      void loadPendingDocuments(selectedProjectId)
+    } else {
+      setPendingDocuments([])
+      setPendingDocumentsError('')
+    }
+  }
 
   const selectedProject = data.projects.find((project) => project.xId === selectedProjectId) ?? null
   const selectedCollections = useMemo(
@@ -277,9 +317,9 @@ function App() {
       },
       pending: {
         title: 'Pending queue',
-        description: 'Documents currently waiting for a successful MySQL projection acknowledgement.',
+        description: 'Documents currently waiting for a successful MySQL projection acknowledgement. The table below is read from TraverseX MySQL.',
         value: runtime?.pending_queue ?? 0,
-        rows: [...common, { label: 'Pending documents', value: runtime?.pending_queue ?? 0 }, { label: 'Active collections', value: runtime?.active_collection_count ?? 0 }, { label: 'Listener documents', value: runtime?.listener_count ?? 0 }, { label: 'Meaning', value: 'A pending count above zero is work still waiting or retrying.' }],
+        rows: [],
       },
       reads: {
         title: 'Firebase reads',
@@ -614,18 +654,18 @@ function App() {
                   <CardContent className="space-y-4">
                     <div className="space-y-3">
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <Metric label="Status" value={selectedRuntime?.service_status ?? 'NOT_READY'} onClick={() => setServiceMetricDialog('status')} />
-                        <Metric label="Listeners" value={`${selectedRuntime?.listener_count ?? 0}/${selectedRuntime?.active_collection_count ?? 0}`} onClick={() => setServiceMetricDialog('listeners')} />
-                        <Metric label="Last event" value={relativeTime(lastEventRecordedAt)} onClick={() => setServiceMetricDialog('lastEvent')} />
+                        <Metric label="Status" value={selectedRuntime?.service_status ?? 'NOT_READY'} onClick={() => openServiceMetric('status')} />
+                        <Metric label="Listeners" value={`${selectedRuntime?.listener_count ?? 0}/${selectedRuntime?.active_collection_count ?? 0}`} onClick={() => openServiceMetric('listeners')} />
+                        <Metric label="Last event" value={relativeTime(lastEventRecordedAt)} onClick={() => openServiceMetric('lastEvent')} />
                       </div>
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <Metric label="Pending" value={selectedRuntime?.pending_queue ?? 0} onClick={() => setServiceMetricDialog('pending')} />
-                        <Metric label="Reads" value={selectedRuntime?.firebase_reads ?? 0} onClick={() => setServiceMetricDialog('reads')} />
-                        <Metric label="Processed" value={selectedRuntime?.processed_count ?? 0} onClick={() => setServiceMetricDialog('processed')} />
+                        <Metric label="Pending" value={selectedRuntime?.pending_queue ?? 0} onClick={() => openServiceMetric('pending')} />
+                        <Metric label="Reads" value={selectedRuntime?.firebase_reads ?? 0} onClick={() => openServiceMetric('reads')} />
+                        <Metric label="Processed" value={selectedRuntime?.processed_count ?? 0} onClick={() => openServiceMetric('processed')} />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <Metric label="Retry collections" value={retryCollections.length} onClick={() => setServiceMetricDialog('retryCollections')} />
-                        <Metric label="Error collections" value={errorCollections.length} onClick={() => setServiceMetricDialog('errorCollections')} />
+                        <Metric label="Retry collections" value={retryCollections.length} onClick={() => openServiceMetric('retryCollections')} />
+                        <Metric label="Error collections" value={errorCollections.length} onClick={() => openServiceMetric('errorCollections')} />
                       </div>
                     </div>
                     <Separator />
@@ -775,7 +815,7 @@ function App() {
       </Dialog>
 
       <Dialog open={serviceMetricDialog !== null} onOpenChange={(open) => { if (!open) setServiceMetricDialog(null) }}>
-        <DialogContent className="max-h-[min(90svh,760px)] max-w-xl overflow-hidden p-0">
+        <DialogContent className={cn('max-h-[min(90svh,760px)] max-w-xl overflow-hidden p-0', serviceMetricDialog === 'pending' && 'max-w-5xl')}>
           {serviceMetricDetails && <>
             <DialogHeader className="border-b px-6 py-5">
               <DialogTitle className="flex items-center gap-2"><Gauge className="size-4 text-primary" />{serviceMetricDetails.title}</DialogTitle>
@@ -789,6 +829,15 @@ function App() {
               {serviceMetricDetails.rows.length > 0 && <dl className="mt-5 divide-y rounded-md border">
                 {serviceMetricDetails.rows.map((row) => <div key={row.label} className="grid gap-1 px-4 py-3 sm:grid-cols-[10rem_minmax(0,1fr)] sm:gap-4"><dt className="text-xs text-muted-foreground">{row.label}</dt><dd className="break-words text-sm">{row.value}</dd></div>)}
               </dl>}
+              {serviceMetricDialog === 'pending' && <div className="mt-5 overflow-x-auto rounded-md border">
+                {pendingDocumentsBusy
+                  ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading pending documents…</div>
+                  : pendingDocumentsError
+                    ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{pendingDocumentsError}</div>
+                    : pendingDocuments.length
+                      ? <Table><TableHeader><TableRow><TableHead>Collection</TableHead><TableHead>Firebase document</TableHead><TableHead>State</TableHead><TableHead>Attempts</TableHead><TableHead>Error</TableHead><TableHead>First seen</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader><TableBody>{pendingDocuments.map((pending) => <TableRow key={pending.xId}><TableCell className="font-medium">{pending.firebase_collection}<span className="mt-1 block text-xs text-muted-foreground">Queue #{pending.xId}</span></TableCell><TableCell className="max-w-56 truncate font-mono text-xs" title={pending.firebase_document_id}>{pending.firebase_document_id}</TableCell><TableCell><Badge variant={statusVariant(pending.pending_state)}>{pending.pending_state}</Badge></TableCell><TableCell className="tabular-nums">{pending.attempt_count}</TableCell><TableCell className="min-w-56 text-xs"><span className={pending.error_code ? 'text-destructive' : 'text-muted-foreground'}>{pending.error_code ?? 'Waiting for retry'}</span><div className="mt-1 text-muted-foreground">{pending.error_description ?? 'No error description'}</div></TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.first_seen_at}</TableCell><TableCell className="whitespace-nowrap text-xs text-muted-foreground">{pending.updated_at}</TableCell></TableRow>)}</TableBody></Table>
+                      : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No pending documents.</div>}
+              </div>}
               {serviceMetricDetails.listenerTargets && <div className="mt-5 overflow-x-auto rounded-md border">
                 <Table>
                   <TableHeader><TableRow><TableHead>Listener target</TableHead><TableHead>Source</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
