@@ -344,7 +344,7 @@ function App() {
       },
       reads: {
         title: 'Firebase reads',
-        description: 'Document-change notifications received from the PENDING-only Firebase listeners during the current worker run. The table below shows their MySQL-recorded outcomes; acknowledgement-only removals do not create projection events.',
+        description: 'The value above is the number of Firebase document notifications received by the PENDING-only listeners. The records below are MySQL projection-event rows, so the two counts can differ.',
         value: runtime?.firebase_reads ?? 0,
         rows: [],
       },
@@ -844,7 +844,7 @@ function App() {
             </DialogHeader>
             <div className="max-h-[min(60svh,520px)] overflow-y-auto px-6 py-5">
               <div className="rounded-md border bg-muted/20 p-4">
-                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Current value</p>
+                <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Firebase notifications read</p>
                 <p className="mt-1 text-2xl font-semibold tabular-nums">{serviceMetricDetails.value}</p>
               </div>
               {serviceMetricDetails.rows.length > 0 && <dl className="mt-5 divide-y rounded-md border">
@@ -864,9 +864,18 @@ function App() {
                   ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading read documents…</div>
                   : readEventsError
                     ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{readEventsError}</div>
-                    : readEvents.length
-                      ? <div className="divide-y">{readEvents.map((event) => <div key={event.xId} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-medium">{event.firebase_collection}</p><p className="text-xs text-muted-foreground">Event #{event.xId}</p></div><div className="flex flex-wrap gap-2"><Badge variant="outline">{event.firebase_change_type}</Badge><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></div></div><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3"><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{event.firebase_document_id}</dd></div><div><dt className="text-xs text-muted-foreground">Attempts</dt><dd className="mt-1 tabular-nums">{event.attempt_count}</dd></div><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Error</dt><dd className={cn('mt-1 break-words text-xs', event.error_code ? 'text-destructive' : 'text-muted-foreground')}><span>{event.error_code ?? 'No error'}</span><span className="mt-1 block text-muted-foreground">{event.error_description ?? 'No error description'}</span></dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase event</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Recorded</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.traverse_recorded_at}</dd></div></dl></div>)}</div>
-                      : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No recorded read documents.</div>}
+                    : <>
+                      <div className="border-b bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span>Projection event records shown</span>
+                          <span className="font-semibold tabular-nums text-foreground">{readEvents.length}</span>
+                        </div>
+                        {readEvents.length < Number(serviceMetricDetails.value) && <p className="mt-2">The remaining {Number(serviceMetricDetails.value) - readEvents.length} notification(s) did not create a projection-event row. Acknowledgement/removal notifications are not stored as projection events.</p>}
+                      </div>
+                      {readEvents.length
+                        ? <div className="divide-y">{readEvents.map((event) => <div key={event.xId} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-medium">{event.firebase_collection}</p><p className="text-xs text-muted-foreground">Event #{event.xId}</p></div><div className="flex flex-wrap gap-2"><Badge variant="outline">{event.firebase_change_type}</Badge><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></div></div><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3"><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{event.firebase_document_id}</dd></div><div><dt className="text-xs text-muted-foreground">Attempts</dt><dd className="mt-1 tabular-nums">{event.attempt_count}</dd></div><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Error</dt><dd className={cn('mt-1 break-words text-xs', event.error_code ? 'text-destructive' : 'text-muted-foreground')}><span>{event.error_code ?? 'No error'}</span><span className="mt-1 block text-muted-foreground">{event.error_description ?? 'No error description'}</span></dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase event</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Recorded</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.traverse_recorded_at}</dd></div></dl></div>)}</div>
+                        : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No recorded read documents.</div>}
+                    </>}
               </div>}
               {serviceMetricDetails.listenerTargets && <div className="mt-5 rounded-md border">
                 <Table>
