@@ -42,9 +42,13 @@ SQL-shaped strings are accepted only when they parse unambiguously. Credential,
 password, token, private-key, and secret-like fields are rejected and are never
 projected.
 
-If the document contains `project_key` or `firebase_collection`, the values
-must match the registered project and monitored collection. A mismatch is
-reported as a failed event and is not acknowledged.
+The registered Firebase project ID and its credential reference define the
+source boundary. RBMSv4's `project_key` is an application-level scope and may
+vary across transaction documents. Set `TRAVERSEX_SOURCE_PROJECT_KEY` to one
+specific key to enforce a single-project scope, or set it to `*` to project all
+document project keys from the registered Firebase project. If a document
+contains `firebase_collection`, it must still match the monitored collection;
+a mismatch is reported as a failed event and is not acknowledged.
 
 ## Create, update, and schema change
 
@@ -113,8 +117,21 @@ periodic full collection rescan is used.
 
 ## Required setup
 
-Apply `database/migrations/004-schema-healing-audit.sql` to the TraverseX
-control database before restarting a worker with automatic healing enabled.
+For a fresh installation, use the complete `database/schema.sql`; it already
+contains `traversex_schema_change`. For an older installation, back up and
+inspect the control database, then apply only the missing numbered migrations
+in order. In particular, `database/migrations/004-schema-healing-audit.sql`
+must be run with the control database selected because it does not contain a
+`USE` statement:
+
+```bash
+sudo mariadb traversex < database/migrations/004-schema-healing-audit.sql
+```
+
 The registered project MySQL account must have `CREATE`, `ALTER`/`RENAME`,
 `DROP` for incomplete rollback, `INSERT`, `UPDATE`, and `SELECT` privileges on
 the registered project database. The worker must not use MySQL root.
+
+The Admin Clear Logs action deletes control-database collection event rows and
+resets current-run runtime counters, but it does not delete Firebase
+documents, target projection tables, or pending work.

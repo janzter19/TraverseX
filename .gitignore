@@ -4,7 +4,14 @@ node_modules/
 !.env.example
 config/secrets/
 runtime/
+logs/
+credentials/
+secrets/
+firebase-credentials/
 *.log
+*.log.*
 *.pem
 *.key
+*service-account*.json
+*firebase-adminsdk*.json
 .DS_Store

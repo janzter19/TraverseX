@@ -22,6 +22,7 @@ if (!project) {
   error.code = 'registered_project_not_found';
   throw error;
 }
+const sourceProjectKey = config.sourceProjectKey || project.project_key;
 
 // The queue is a control-database report snapshot. Creating it is idempotent
 // and does not read or mutate Firebase data.
@@ -38,6 +39,7 @@ let listenerCount = 0;
 let lastEventAt = null;
 let lastFailure = null;
 let runtimeWrite = Promise.resolve();
+let runtimeMarker = null;
 const listenerSizes = new Map();
 const eventAttempts = new Map();
 
@@ -56,7 +58,7 @@ const safeFailure = (error, fallbackCode = 'projection_failed') => {
     projection_table_name_too_long: 'The monitored collection name is too long for a MySQL table and backup name.',
     firebase_document_key_mismatch: 'The Firebase document ID did not match its declared record key.',
     firebase_collection_mismatch: 'The Firebase document collection marker did not match the monitored collection.',
-    firebase_project_mismatch: 'The Firebase document belongs to a different registered project.',
+    firebase_project_mismatch: 'The Firebase document project key is outside the configured source scope.',
     firebase_readback_mismatch: 'The MySQL projection read-back did not match the Firebase document.',
     schema_backup_failed: 'TraverseX could not create the recoverable MySQL schema backup.',
     schema_rebuild_failed: 'TraverseX could not rebuild the MySQL projection from the Firebase fields.',
@@ -69,21 +71,43 @@ const safeFailure = (error, fallbackCode = 'projection_failed') => {
   return { code, description };
 };
 
+const syncRuntimeReset = async () => {
+  const rows = await query(`SELECT DATE_FORMAT(last_restart_at, '%Y-%m-%d %H:%i:%s.%f') AS runtime_marker
+    FROM traversex_runtime WHERE project_xId = ? LIMIT 1`, [project.xId]);
+  const nextMarker = rows[0]?.runtime_marker ?? null;
+  if (runtimeMarker === null) {
+    runtimeMarker = nextMarker;
+    return;
+  }
+  if (nextMarker === runtimeMarker) return;
+  runtimeMarker = nextMarker;
+  firebaseReads = 0;
+  processedCount = 0;
+  retryCount = 0;
+  deadLetterCount = 0;
+  lastEventAt = null;
+  lastFailure = null;
+  eventAttempts.clear();
+};
+
 const writeRuntime = (status = runtimeStatus, failure = undefined) => {
   runtimeStatus = status;
   if (failure) lastFailure = failure;
   if (status === 'RUNNING' && pendingQueue === 0) lastFailure = null;
-  const reportedFailure = lastFailure;
-  const write = runtimeWrite.catch(() => {}).then(() => query(`UPDATE traversex_runtime
-    SET service_status = ?, firebase_reads = ?, pending_queue = ?, processed_count = ?,
-        retry_count = ?, dead_letter_count = ?, active_collection_count = ?, listener_count = ?,
-        last_heartbeat_at = CURRENT_TIMESTAMP(6), last_event_at = ?,
-        last_error_code = ?, last_error_description = ?
-    WHERE project_xId = ?`, [
-    status, firebaseReads, pendingQueue, processedCount, retryCount, deadLetterCount,
-    activeCollectionCount, listenerCount, lastEventAt,
-    reportedFailure?.code ?? null, reportedFailure?.description ?? null, project.xId
-  ]));
+  const write = runtimeWrite.catch(() => {}).then(async () => {
+    await syncRuntimeReset();
+    const reportedFailure = lastFailure;
+    return query(`UPDATE traversex_runtime
+      SET service_status = ?, firebase_reads = ?, pending_queue = ?, processed_count = ?,
+          retry_count = ?, dead_letter_count = ?, active_collection_count = ?, listener_count = ?,
+          last_heartbeat_at = CURRENT_TIMESTAMP(6), last_event_at = ?,
+          last_error_code = ?, last_error_description = ?
+      WHERE project_xId = ?`, [
+      status, firebaseReads, pendingQueue, processedCount, retryCount, deadLetterCount,
+      activeCollectionCount, listenerCount, lastEventAt,
+      reportedFailure?.code ?? null, reportedFailure?.description ?? null, project.xId
+    ]);
+  });
   runtimeWrite = write.catch(() => {});
   return write;
 };
@@ -317,7 +341,7 @@ const projectDynamicProjection = async (registry, change) => {
     error.code = 'firebase_collection_mismatch';
     throw error;
   }
-  if (data.project_key !== undefined && data.project_key !== project.project_key) {
+  if (sourceProjectKey !== '*' && data.project_key !== undefined && data.project_key !== sourceProjectKey) {
     const error = new Error('firebase_project_mismatch');
     error.code = 'firebase_project_mismatch';
     throw error;
@@ -559,6 +583,7 @@ const heartbeatTimer = setInterval(() => {
 heartbeatTimer.unref();
 
 console.log(`TraverseX worker ${config.instanceId} ready for registered project ${project.project_key}`);
+console.log(`Source project scope: ${sourceProjectKey === '*' ? 'all document project keys' : sourceProjectKey}`);
 console.log(`Listeners active: ${listenerCount} PENDING-only collection listeners; no periodic full rescan.`);
 console.log(`Collections configured: ${listenerRegistries.map((row) => row.firebase_collection).join(', ') || 'none'}; project_test is the built-in diagnostics listener.`);
 void listeners;

@@ -139,6 +139,15 @@ app.get('/admin/api/dashboard', auth, async (req, res) => {
       query(`SELECT r.project_xId, r.service_status, r.firebase_reads,
         COALESCE(q.pending_queue, 0) AS pending_queue,
         r.processed_count, r.retry_count, r.dead_letter_count,
+        COALESCE((SELECT COUNT(*) FROM traversex_collection_event e
+          WHERE e.project_xId = r.project_xId AND e.event_status = 'SUCCESS'
+            AND (r.last_restart_at IS NULL OR e.traverse_recorded_at >= r.last_restart_at)), 0) AS processed_records,
+        COALESCE((SELECT COUNT(*) FROM traversex_collection_event e
+          WHERE e.project_xId = r.project_xId AND e.event_status = 'RETRY' AND e.attempt_count > 0
+            AND (r.last_restart_at IS NULL OR e.traverse_recorded_at >= r.last_restart_at)), 0) AS retry_records,
+        COALESCE((SELECT COUNT(*) FROM traversex_collection_event e
+          WHERE e.project_xId = r.project_xId AND e.event_status IN ('ERROR', 'DEAD_LETTER')
+            AND (r.last_restart_at IS NULL OR e.traverse_recorded_at >= r.last_restart_at)), 0) AS error_records,
         r.active_collection_count, r.listener_count, r.last_heartbeat_at,
         r.last_restart_at, r.last_event_at, r.last_error_code, r.last_error_description
         FROM traversex_runtime r
@@ -173,6 +182,32 @@ app.get('/admin/api/pending-queue', auth, async (req, res) => {
         ORDER BY updated_at DESC, xId DESC LIMIT ${limit}`, [projectXId])
     ]);
     return json(res, 200, { ok: true, pending_queue: Number(countRows[0]?.pending_queue ?? 0), rows });
+  } catch (error) {
+    return json(res, 500, { ok: false, error: safeError(error) });
+  }
+});
+app.get('/admin/api/service-events', auth, async (req, res) => {
+  try {
+    const projectXId = Number(req.query.project_xId);
+    if (!Number.isInteger(projectXId) || projectXId < 1) return json(res, 400, { ok: false, error: 'invalid_project_id' });
+    const kind = String(req.query.kind ?? 'reads');
+    const filters = {
+      reads: '1 = 1',
+      processed: "e.event_status = 'SUCCESS'",
+      retry: "e.event_status = 'RETRY' AND e.attempt_count > 0",
+      error: "e.event_status IN ('ERROR', 'DEAD_LETTER')",
+    };
+    if (!(kind in filters)) return json(res, 400, { ok: false, error: 'invalid_service_event_kind' });
+    const rows = await query(`SELECT e.xId, e.firebase_collection, e.firebase_document_id, e.firebase_change_type,
+      e.event_status, e.attempt_count, e.error_code, e.error_description,
+      e.firebase_event_at, e.traverse_recorded_at
+      FROM traversex_collection_event e
+      JOIN traversex_runtime r ON r.project_xId = e.project_xId
+      WHERE e.project_xId = ?
+        AND (r.last_restart_at IS NULL OR e.traverse_recorded_at >= r.last_restart_at)
+        AND (${filters[kind]})
+      ORDER BY e.traverse_recorded_at DESC, e.xId DESC`, [projectXId]);
+    return json(res, 200, { ok: true, kind, rows });
   } catch (error) {
     return json(res, 500, { ok: false, error: safeError(error) });
   }
@@ -225,12 +260,22 @@ app.post('/admin/api/clear-logs', auth, async (req, res) => {
           last_event_attempt_count = NULL,
           last_event_recorded_at = NULL`);
     const [events] = await connection.execute('DELETE FROM traversex_collection_event');
+    const [runtime] = await connection.execute(`UPDATE traversex_runtime
+      SET firebase_reads = 0,
+          processed_count = 0,
+          retry_count = 0,
+          dead_letter_count = 0,
+          last_restart_at = CURRENT_TIMESTAMP(6),
+          last_event_at = NULL,
+          last_error_code = NULL,
+          last_error_description = NULL`);
     await connection.commit();
     return json(res, 200, {
       ok: true,
       cleared: {
         collection_events: Number(events.affectedRows ?? 0),
         collection_cache_rows: Number(collections.affectedRows ?? 0),
+        runtime_rows: Number(runtime.affectedRows ?? 0),
       },
     });
   } catch (error) {

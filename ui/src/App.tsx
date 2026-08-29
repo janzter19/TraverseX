@@ -85,6 +85,9 @@ type Runtime = {
   processed_count: number
   retry_count: number
   dead_letter_count: number
+  processed_records?: number
+  retry_records?: number
+  error_records?: number
   active_collection_count: number
   listener_count: number
   last_heartbeat_at?: string | null
@@ -123,6 +126,7 @@ type PendingDocument = {
 type ProjectDraft = Omit<Project, 'xId' | 'project_status'> & { project_status: string; mysql_password: string }
 type CollectionDraft = { project_xId: string; firebase_collection: string; traverse_status: string }
 type ServiceMetricKey = 'status' | 'pending' | 'reads' | 'processed' | 'listeners' | 'lastEvent' | 'retryCollections' | 'errorCollections'
+type ServiceEventMode = 'reads' | 'processed' | 'retry' | 'error'
 
 type ServiceMetricDetails = {
   title: string
@@ -130,6 +134,8 @@ type ServiceMetricDetails = {
   value: string | number
   rows: { label: string; value: string | number }[]
   collections?: Collection[]
+  events?: CollectionEvent[]
+  eventMode?: ServiceEventMode
   listenerTargets?: { name: string; source: string; status: string }[]
 }
 
@@ -225,9 +231,9 @@ function App() {
   const [pendingDocuments, setPendingDocuments] = useState<PendingDocument[]>([])
   const [pendingDocumentsBusy, setPendingDocumentsBusy] = useState(false)
   const [pendingDocumentsError, setPendingDocumentsError] = useState('')
-  const [readEvents, setReadEvents] = useState<CollectionEvent[]>([])
-  const [readEventsBusy, setReadEventsBusy] = useState(false)
-  const [readEventsError, setReadEventsError] = useState('')
+  const [serviceEvents, setServiceEvents] = useState<CollectionEvent[]>([])
+  const [serviceEventsBusy, setServiceEventsBusy] = useState(false)
+  const [serviceEventsError, setServiceEventsError] = useState('')
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setBusy(true)
@@ -262,17 +268,17 @@ function App() {
     }
   }
 
-  async function loadReadEvents(projectXId: number) {
-    setReadEventsBusy(true)
-    setReadEventsError('')
+  async function loadServiceEvents(projectXId: number, kind: ServiceEventMode) {
+    setServiceEventsBusy(true)
+    setServiceEventsError('')
     try {
-      const result = await request(`/admin/api/read-events?project_xId=${encodeURIComponent(projectXId)}&limit=200`) as { rows?: CollectionEvent[] }
-      setReadEvents(result.rows ?? [])
+      const result = await request(`/admin/api/service-events?project_xId=${encodeURIComponent(projectXId)}&kind=${kind}`) as { rows?: CollectionEvent[] }
+      setServiceEvents(result.rows ?? [])
     } catch (error) {
-      setReadEvents([])
-      setReadEventsError(error instanceof Error ? error.message : 'read_events_failed')
+      setServiceEvents([])
+      setServiceEventsError(error instanceof Error ? error.message : 'service_events_failed')
     } finally {
-      setReadEventsBusy(false)
+      setServiceEventsBusy(false)
     }
   }
 
@@ -280,13 +286,14 @@ function App() {
     setServiceMetricDialog(metric)
     if (metric === 'pending' && selectedProjectId !== null) {
       void loadPendingDocuments(selectedProjectId)
-    } else if (metric === 'reads' && selectedProjectId !== null) {
-      void loadReadEvents(selectedProjectId)
+    } else if (selectedProjectId !== null && ['reads', 'processed', 'retryCollections', 'errorCollections'].includes(metric)) {
+      const kind = metric === 'retryCollections' ? 'retry' : metric === 'errorCollections' ? 'error' : metric
+      void loadServiceEvents(selectedProjectId, kind as ServiceEventMode)
     } else {
       setPendingDocuments([])
       setPendingDocumentsError('')
-      setReadEvents([])
-      setReadEventsError('')
+      setServiceEvents([])
+      setServiceEventsError('')
     }
   }
 
@@ -303,13 +310,17 @@ function App() {
     [selectedCollections],
   )
   const lastEventRecordedAt = latestCollectionEvent?.last_event_recorded_at ?? selectedRuntime?.last_event_at
-  const retryCollections = useMemo(
-    () => selectedCollections.filter((collection) => collection.last_event_status === 'RETRY' && (collection.last_event_attempt_count ?? 0) > 1),
-    [selectedCollections],
+  const processedEvents = useMemo(
+    () => serviceEvents.filter((event) => event.event_status === 'SUCCESS'),
+    [serviceEvents],
   )
-  const errorCollections = useMemo(
-    () => selectedCollections.filter((collection) => collection.last_event_status === 'ERROR' || collection.last_event_status === 'DEAD_LETTER'),
-    [selectedCollections],
+  const retryEvents = useMemo(
+    () => serviceEvents.filter((event) => event.event_status === 'RETRY' && event.attempt_count > 0),
+    [serviceEvents],
+  )
+  const errorEvents = useMemo(
+    () => serviceEvents.filter((event) => event.event_status === 'ERROR' || event.event_status === 'DEAD_LETTER'),
+    [serviceEvents],
   )
   const serviceMetricDetails = useMemo(() => {
     if (!serviceMetricDialog) return null
@@ -338,21 +349,25 @@ function App() {
       },
       pending: {
         title: 'Pending queue',
-        description: 'Documents currently waiting for a successful MySQL projection acknowledgement. The table below is read from TraverseX MySQL.',
+        description: 'Only documents still in PENDING status are shown. The reason below explains why each document is waiting.',
         value: runtime?.pending_queue ?? 0,
         rows: [],
       },
       reads: {
         title: 'Firebase reads',
-        description: 'The value above is the number of Firebase document notifications received by the PENDING-only listeners. The records below are MySQL projection-event rows, so the two counts can differ.',
+        description: 'Actual Firebase document notifications received by the PENDING-only listeners during the current worker run.',
         value: runtime?.firebase_reads ?? 0,
-        rows: [],
+        rows: [...common, { label: 'Listener scope', value: 'PENDING-only documents' }, { label: 'Period', value: runtime?.last_restart_at ? `Since ${runtime.last_restart_at}` : 'Current worker run' }],
+        events: serviceEvents,
+        eventMode: 'reads',
       },
       processed: {
         title: 'Processed projections',
-        description: 'Successful Firebase-to-MySQL projections acknowledged during the current worker run.',
-        value: runtime?.processed_count ?? 0,
-        rows: [...common, { label: 'Successful projections', value: runtime?.processed_count ?? 0 }, { label: 'Retries', value: runtime?.retry_count ?? 0 }, { label: 'Dead letters', value: runtime?.dead_letter_count ?? 0 }, { label: 'Meaning', value: 'This counter is not increased when a projection fails.' }],
+        description: 'All successful Firebase-to-MySQL projections recorded during the current worker run.',
+        value: runtime?.processed_records ?? runtime?.processed_count ?? 0,
+        rows: [...common, { label: 'Filter', value: 'Event status = SUCCESS' }, { label: 'Source', value: 'TraverseX MySQL collection events' }],
+        events: processedEvents,
+        eventMode: 'processed',
       },
       listeners: {
         title: 'Active listeners',
@@ -368,22 +383,24 @@ function App() {
         rows: [...common, { label: 'Collection', value: lastEvent?.firebase_collection ?? 'Not recorded' }, { label: 'Change', value: lastEvent?.last_event_change_type ?? 'Not recorded' }, { label: 'Document', value: lastEvent?.last_event_document_id ?? 'Not recorded' }, { label: 'Status', value: lastEvent?.last_event_status ?? 'Not recorded' }, { label: 'Attempts', value: lastEvent?.last_event_attempt_count ?? 'Not recorded' }, { label: 'Recorded', value: lastEvent?.last_event_recorded_at ?? runtime?.last_event_at ?? 'Not recorded' }, { label: 'Runtime error', value: runtime?.last_error_code ?? 'None recorded' }, { label: 'Error description', value: runtime?.last_error_description ?? 'No error description recorded.' }],
       },
       retryCollections: {
-        title: 'Retry collections',
-        description: 'Collections whose latest recorded event is RETRY and has already been attempted more than once.',
-        value: retryCollections.length,
-        rows: [...common, { label: 'Matching collections', value: retryCollections.length }, { label: 'Rule', value: 'Latest event status = RETRY and attempts > 1' }, { label: 'Source', value: 'TraverseX MySQL collection cache; zero Firebase reads' }],
-        collections: retryCollections,
+        title: 'Retry records',
+        description: 'All current-worker-run records with RETRY status and at least one attempt.',
+        value: runtime?.retry_records ?? runtime?.retry_count ?? 0,
+        rows: [...common, { label: 'Filter', value: 'Event status = RETRY and attempts > 0' }, { label: 'Source', value: 'TraverseX MySQL collection events' }],
+        events: retryEvents,
+        eventMode: 'retry',
       },
       errorCollections: {
-        title: 'Error collections',
-        description: 'Collections whose latest recorded event is an error or terminal DEAD_LETTER outcome.',
-        value: errorCollections.length,
-        rows: [...common, { label: 'Matching collections', value: errorCollections.length }, { label: 'Rule', value: 'Latest event status = ERROR or DEAD_LETTER' }, { label: 'Source', value: 'TraverseX MySQL collection cache; zero Firebase reads' }],
-        collections: errorCollections,
+        title: 'Error records',
+        description: 'All current-worker-run records with ERROR or DEAD_LETTER status only.',
+        value: runtime?.error_records ?? runtime?.dead_letter_count ?? 0,
+        rows: [...common, { label: 'Filter', value: 'Event status = ERROR or DEAD_LETTER' }, { label: 'Source', value: 'TraverseX MySQL collection events' }],
+        events: errorEvents,
+        eventMode: 'error',
       },
     }
     return details[serviceMetricDialog]
-  }, [errorCollections, latestCollectionEvent, retryCollections, selectedCollections, selectedProject, selectedRuntime, serviceMetricDialog])
+  }, [errorEvents, latestCollectionEvent, processedEvents, retryEvents, selectedCollections, selectedProject, selectedRuntime, serviceMetricDialog])
   const serviceUnit = `traversex@${data.instance_id ?? selectedProject?.project_key ?? 'project-a'}.service`
   const selectedMysqlTarget = selectedProject
     ? `${selectedProject.mysql_database || 'Database not configured'} · ${selectedProject.mysql_host || 'host unavailable'}${selectedProject.mysql_port ? `:${selectedProject.mysql_port}` : ''}`
@@ -531,12 +548,12 @@ function App() {
       const result = await request('/admin/api/clear-logs', {
         method: 'POST',
         headers: { 'X-CSRF-Token': data.csrf_token },
-      }) as { cleared?: { collection_events?: number; collection_cache_rows?: number } }
+      }) as { cleared?: { collection_events?: number; collection_cache_rows?: number; runtime_rows?: number } }
       setClearLogsDialog(false)
       setCollectionLogs([])
       setNotice({
         tone: 'success',
-        text: `Cleared ${result.cleared?.collection_events ?? 0} event log(s) and reset ${result.cleared?.collection_cache_rows ?? 0} collection cache row(s).`,
+        text: `Cleared ${result.cleared?.collection_events ?? 0} event log(s), reset ${result.cleared?.collection_cache_rows ?? 0} collection cache row(s), and reset counters for ${result.cleared?.runtime_rows ?? 0} runtime row(s).`,
       })
       await load(true)
     } catch (error) {
@@ -699,8 +716,8 @@ function App() {
                         <Metric label="Processed" value={selectedRuntime?.processed_count ?? 0} onClick={() => openServiceMetric('processed')} />
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <Metric label="Retry collections" value={retryCollections.length} onClick={() => openServiceMetric('retryCollections')} />
-                        <Metric label="Error collections" value={errorCollections.length} onClick={() => openServiceMetric('errorCollections')} />
+                        <Metric label="Retries" value={selectedRuntime?.retry_records ?? selectedRuntime?.retry_count ?? 0} onClick={() => openServiceMetric('retryCollections')} />
+                        <Metric label="Errors" value={selectedRuntime?.error_records ?? selectedRuntime?.dead_letter_count ?? 0} onClick={() => openServiceMetric('errorCollections')} />
                       </div>
                     </div>
                     <Separator />
@@ -833,7 +850,7 @@ function App() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2"><Trash2 className="size-4 text-destructive" />Clear all collection logs?</DialogTitle>
             <DialogDescription>
-              This permanently deletes all rows from <code>traversex_collection_event</code> and clears the latest-event fields in <code>traversex_collection</code>. Firebase documents, projection tables, and pending queue records will not be changed.
+              This permanently deletes all rows from <code>traversex_collection_event</code>, clears the latest-event fields in <code>traversex_collection</code>, and resets the Reads, Processed, Retries, Errors, and last-event counters. Firebase documents, projection tables, and pending queue records will not be changed.
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
@@ -850,7 +867,7 @@ function App() {
       </Dialog>
 
       <Dialog open={serviceMetricDialog !== null} onOpenChange={(open) => { if (!open) setServiceMetricDialog(null) }}>
-        <DialogContent className={cn('max-h-[min(90svh,760px)] max-w-xl overflow-hidden p-0', ['pending', 'reads'].includes(serviceMetricDialog ?? '') && 'max-w-5xl')}>
+        <DialogContent className="max-h-[min(90svh,760px)] max-w-5xl overflow-hidden p-0">
           {serviceMetricDetails && <>
             <DialogHeader className="border-b px-6 py-5">
               <DialogTitle className="flex items-center gap-2"><Gauge className="size-4 text-primary" />{serviceMetricDetails.title}</DialogTitle>
@@ -870,26 +887,33 @@ function App() {
                   : pendingDocumentsError
                     ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{pendingDocumentsError}</div>
                     : pendingDocuments.length
-                      ? <div className="divide-y">{pendingDocuments.map((pending) => <div key={pending.xId} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-medium">{pending.firebase_collection}</p><p className="text-xs text-muted-foreground">Queue #{pending.xId}</p></div><Badge variant={statusVariant(pending.pending_state)}>{pending.pending_state}</Badge></div><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3"><div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{pending.firebase_document_id}</dd></div><div><dt className="text-xs text-muted-foreground">Attempts</dt><dd className="mt-1 tabular-nums">{pending.attempt_count}</dd></div><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Error</dt><dd className={cn('mt-1 break-words text-xs', pending.error_code ? 'text-destructive' : 'text-muted-foreground')}><span>{pending.error_code ?? 'Waiting for retry'}</span><span className="mt-1 block text-muted-foreground">{pending.error_description ?? 'No error description'}</span></dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">First seen</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{pending.first_seen_at}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Updated</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{pending.updated_at}</dd></div></dl></div>)}</div>
+                      ? <div className="divide-y">{pendingDocuments.map((pending) => <div key={pending.xId} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-medium">{pending.firebase_collection}</p><p className="text-xs text-muted-foreground">Pending record #{pending.xId}</p></div><Badge variant="outline">PENDING</Badge></div><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2"><div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{pending.firebase_document_id}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Why pending</dt><dd className={cn('mt-1 break-words text-xs', pending.error_code ? 'text-destructive' : 'text-muted-foreground')}><span>{pending.error_code ?? 'Waiting for successful MySQL projection acknowledgement'}</span><span className="mt-1 block text-muted-foreground">{pending.error_description ?? 'The document remains in the PENDING-only queue until projection succeeds.'}</span></dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">First seen</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{pending.first_seen_at}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Updated</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{pending.updated_at}</dd></div></dl></div>)}</div>
                       : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No pending documents.</div>}
               </div>}
               {serviceMetricDialog === 'reads' && <div className="mt-5 rounded-md border">
-                {readEventsBusy
+                {serviceEventsBusy
                   ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading read documents…</div>
-                  : readEventsError
-                    ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{readEventsError}</div>
+                  : serviceEventsError
+                    ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{serviceEventsError}</div>
                     : <>
                       <div className="border-b bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span>Projection event records shown</span>
-                          <span className="font-semibold tabular-nums text-foreground">{readEvents.length}</span>
+                          <span>Read records shown</span>
+                          <span className="font-semibold tabular-nums text-foreground">{serviceMetricDetails.events?.length ?? 0}</span>
                         </div>
-                        {readEvents.length < Number(serviceMetricDetails.value) && <p className="mt-2">The remaining {Number(serviceMetricDetails.value) - readEvents.length} notification(s) did not create a projection-event row. Acknowledgement/removal notifications are not stored as projection events.</p>}
+                        {(serviceMetricDetails.events?.length ?? 0) < Number(serviceMetricDetails.value) && <p className="mt-2">The remaining {Number(serviceMetricDetails.value) - (serviceMetricDetails.events?.length ?? 0)} notification(s) do not have a read record available. Acknowledgement/removal notifications are not listed.</p>}
                       </div>
-                      {readEvents.length
-                        ? <div className="divide-y">{readEvents.map((event) => <div key={event.xId} className="space-y-3 p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div className="min-w-0"><p className="break-words font-medium">{event.firebase_collection}</p><p className="text-xs text-muted-foreground">Event #{event.xId}</p></div><div className="flex flex-wrap gap-2"><Badge variant="outline">{event.firebase_change_type}</Badge><Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge></div></div><dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3"><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{event.firebase_document_id}</dd></div><div><dt className="text-xs text-muted-foreground">Attempts</dt><dd className="mt-1 tabular-nums">{event.attempt_count}</dd></div><div className="min-w-0 sm:col-span-2 lg:col-span-1"><dt className="text-xs text-muted-foreground">Error</dt><dd className={cn('mt-1 break-words text-xs', event.error_code ? 'text-destructive' : 'text-muted-foreground')}><span>{event.error_code ?? 'No error'}</span><span className="mt-1 block text-muted-foreground">{event.error_description ?? 'No error description'}</span></dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase event</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</dd></div><div className="min-w-0"><dt className="text-xs text-muted-foreground">Recorded</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.traverse_recorded_at}</dd></div></dl></div>)}</div>
+                      {(serviceMetricDetails.events?.length ?? 0) > 0
+                        ? <EventList events={serviceMetricDetails.events ?? []} mode="reads" />
                         : <div className="flex min-h-32 items-center justify-center rounded-md border-dashed text-sm text-muted-foreground">No recorded read documents.</div>}
                     </>}
+              </div>}
+              {serviceMetricDetails.eventMode && serviceMetricDialog !== 'reads' && <div className="mt-5 rounded-md border">
+                {serviceEventsBusy
+                  ? <div className="flex min-h-32 items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Loading {serviceMetricDetails.eventMode} records…</div>
+                  : serviceEventsError
+                    ? <div className="m-4 rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{serviceEventsError}</div>
+                    : <EventList events={serviceMetricDetails.events ?? []} mode={serviceMetricDetails.eventMode} />}
               </div>}
               {serviceMetricDetails.listenerTargets && <div className="mt-5 rounded-md border">
                 <Table>
@@ -918,6 +942,25 @@ function App() {
       <Dialog open={testDialog} onOpenChange={setTestDialog}><DialogContent className="flex max-h-[min(90svh,760px)] max-w-2xl flex-col gap-0 overflow-hidden p-0"><DialogHeader className="shrink-0 border-b px-6 py-5"><DialogTitle className="flex items-center gap-2"><TestTube2 className="size-4 text-primary" />Projection test</DialogTitle><DialogDescription>This modal stays open so the Firebase acknowledgement and Traverse result can be reviewed.</DialogDescription></DialogHeader><form id="test-form" className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-5" onSubmit={(event) => void runTest(event)}><input type="hidden" name="project_key" value={selectedProject?.project_key ?? ''} /><Field label="Test name" name="test_name" defaultValue="TraverseX test" required /><div className="space-y-2"><Label htmlFor="test_message">Message</Label><Textarea id="test_message" name="test_message" defaultValue="Firebase-first projection test" rows={4} /></div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={testReset} onChange={(event) => setTestReset(event.target.checked)} /> Reset test table and documents before inserting</label><div className="rounded-md border bg-muted/20 p-3"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-medium text-foreground">Sample Test</p><p className="mt-1 text-xs text-muted-foreground">Uses the selected project-level database.</p></div><Badge variant="outline">MySQL target</Badge></div><code className="mt-2 block truncate text-xs text-muted-foreground" title={selectedMysqlTarget}>{selectedMysqlTarget}</code></div><div className="space-y-2"><Label htmlFor="test-result">Test Results</Label>{testResult ? <pre id="test-result" className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-4 text-xs leading-relaxed" role="status" aria-live="polite">{testResult}</pre> : <div id="test-result" className="rounded-md border border-dashed bg-muted/20 p-4 text-xs text-muted-foreground" role="status" aria-live="polite">No test result yet. Run the sample test to view the Firebase acknowledgement and Traverse projection status.</div>}</div></form><DialogFooter className="shrink-0 border-t px-6 py-4"><span className="mr-auto text-xs text-muted-foreground">Result remains visible after submit.</span><Button type="submit" form="test-form" disabled={busy}>{busy && <Loader2 className="size-4 animate-spin" />}Run test</Button></DialogFooter></DialogContent></Dialog>
     </div>
   )
+}
+
+function EventList({ events, mode }: { events: CollectionEvent[]; mode: ServiceEventMode }) {
+  const recordLabel = mode === 'reads' ? 'Read record' : mode === 'processed' ? 'Processed record' : mode === 'retry' ? 'Retry record' : 'Error record'
+  if (!events.length) return <div className="flex min-h-32 items-center justify-center border-dashed text-sm text-muted-foreground">No {mode} records for the current worker run.</div>
+  return <div className="divide-y">{events.map((event) => <div key={event.xId} className="space-y-3 p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0"><p className="break-words font-medium">{event.firebase_collection}</p><p className="text-xs text-muted-foreground">{recordLabel} #{event.xId}</p></div>
+      {mode !== 'reads' && <Badge variant={statusVariant(event.event_status)}>{event.event_status}</Badge>}
+    </div>
+    <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+      <div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase document</dt><dd className="mt-1 break-all font-mono text-xs">{event.firebase_document_id}</dd></div>
+      <div><dt className="text-xs text-muted-foreground">Change</dt><dd className="mt-1">{event.firebase_change_type}</dd></div>
+      {mode === 'retry' && <div><dt className="text-xs text-muted-foreground">Attempts</dt><dd className="mt-1 tabular-nums">{event.attempt_count}</dd></div>}
+      {mode === 'error' && <div className="min-w-0"><dt className="text-xs text-muted-foreground">Error</dt><dd className="mt-1 break-words text-xs text-destructive">{event.error_code ?? event.event_status}<span className="mt-1 block text-muted-foreground">{event.error_description ?? 'No error description'}</span></dd></div>}
+      <div className="min-w-0"><dt className="text-xs text-muted-foreground">Firebase event</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.firebase_event_at ?? '—'}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-muted-foreground">Recorded</dt><dd className="mt-1 break-words text-xs text-muted-foreground">{event.traverse_recorded_at}</dd></div>
+    </dl>
+  </div>)}</div>
 }
 
 function Field({ label, name, value, defaultValue, onChange, type = 'text', placeholder, required }: { label: string; name: string; value?: string; defaultValue?: string; onChange?: (value: string) => void; type?: string; placeholder?: string; required?: boolean }) {

@@ -21,5 +21,8 @@ export const config = Object.freeze({
     projectId: process.env.FIREBASE_PROJECT_ID ?? '',
     credentialsFile: process.env.FIREBASE_CREDENTIALS_FILE ?? ''
   },
-  instanceId: process.env.TRAVERSEX_INSTANCE_ID ?? 'project-a'
+  instanceId: process.env.TRAVERSEX_INSTANCE_ID ?? 'project-a',
+  // Firebase project credentials define the source boundary. By default the
+  // registered RBMSv4 Firebase project may contain multiple application keys.
+  sourceProjectKey: (process.env.TRAVERSEX_SOURCE_PROJECT_KEY ?? '*').trim()
 });
